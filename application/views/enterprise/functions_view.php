@@ -93,17 +93,53 @@
                 <div class="card mb-4 bg-dark text-white">
                     <div class="card-body">
                         <h5 class="card-title text-orange">🛡️ Collatéraux</h5>
+                        
                         <div class="p-3 bg-darker rounded mb-3">
-                            <h6 class="text-muted">Collatéral Déposé</h6>
-                            <h4 id="total-collateral">0 USDT</h4>
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div>
+                                    <h6 class="text-muted">Total Collatéral</h6>
+                                    <h4 id="total-collateral">0 USDT</h4>
+                                </div>
+                                <span class="badge bg-secondary">
+                                    <i class="bi bi-wallet2"></i> Dépôt
+                                </span>
+                            </div>
                         </div>
+                        
                         <div class="p-3 bg-darker rounded mb-3">
-                            <h6 class="text-muted">Collatéral à Libérer</h6>
-                            <h4 id="releasable-collateral">0 USDT</h4>
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div>
+                                    <h6 class="text-muted">Disponible à Libérer</h6>
+                                    <h4 id="releasable-collateral">0 USDT</h4>
+                                </div>
+                                <span class="badge bg-success">
+                                    <i class="bi bi-unlock"></i> Libérable
+                                </span>
+                            </div>
                         </div>
+                        
+                        <div class="p-3 bg-darker rounded mb-3">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div>
+                                    <h6 class="text-muted">Retenu (2ème collatéral)</h6>
+                                    <h4 id="withheld-collateral">0 USDT</h4>
+                                </div>
+                                <span class="badge bg-warning text-dark">
+                                    <i class="bi bi-lock"></i> Retenu
+                                </span>
+                            </div>
+                        </div>
+                        
                         <div class="p-3 bg-darker rounded">
-                            <h6 class="text-muted">Taux Moyen</h6>
-                            <h4 id="avg-collateral-rate">0%</h4>
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div>
+                                    <h6 class="text-muted">Taux Moyen</h6>
+                                    <h4 id="avg-collateral-rate">0%</h4>
+                                </div>
+                                <span class="badge bg-info">
+                                    <i class="bi bi-percent"></i> Taux
+                                </span>
+                            </div>
                         </div>
                     </div>
                 </div>

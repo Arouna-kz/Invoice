@@ -1606,13 +1606,15 @@ function setupEnterpriseForms() {
             const userAddress = window.walletUtils.getCurrentWalletAddress();
             const allInvoices = await window.sharedFunctions.getAllInvoices();
             const companyInvoices = window.sharedFunctions.filterInvoicesByCompany(allInvoices, userAddress);
-            
+
             let totalAmount = 0;
             let totalInterest = 0;
             let totalFees = 0;
             let withdrawableAmount = 0;
             let totalCollateral = 0;
             let releasableCollateral = 0;
+            let stakedCollateral = 0;
+            let withheldCollateral = 0;
             let collateralRates = [];
             const upcomingDueDates = [];
             const now = Math.floor(Date.now() / 1000);
@@ -1633,56 +1635,96 @@ function setupEnterpriseForms() {
                     withdrawableAmount += invoiceAmount;
                 }
                 
-                if (invoice.details.requireCollateral) {
-                    const collateral = await window.enterpriseFunctions.getCollateralDetails(invoice.details.invoiceId);
-                    const initialCollateral = invoiceAmount * (collateral.rates.initialDepositRate / 10000);
-                    const withheldCollateral = invoiceAmount * (collateral.rates.withheldRate / 10000);
-                    
-                    totalCollateral += initialCollateral + withheldCollateral;
-                    collateralRates.push(collateral.rates.initialDepositRate / 100);
-                    
-                    if (await window.enterpriseFunctions.canReleaseCollateral(invoice.details.invoiceId)) {
-                        releasableCollateral += initialCollateral + withheldCollateral;
+                // Récupération des détails du collatéral
+                const collateral = await window.enterpriseFunctions.getCollateralDetails(invoice.details.invoiceId);
+                console.log("Détails collatéral:", collateral);
+                
+                // Conversion des montants
+                const initialDeposit = parseFloat(collateral.initialDeposit || '0');
+                const withheld = parseFloat(collateral.withheldAmount || '0');
+                const staked = parseFloat(collateral.stakedAmount || '0');
+                const total = parseFloat(collateral.totalAmount || '0');
+                
+                // Calcul des taux
+                const initialRate = collateral.rates?.initialDepositRate 
+                    ? parseFloat(ethers.utils.formatEther(collateral.rates.initialDepositRate)) * 100 
+                    : 0;
+                const withheldRate = collateral.rates?.withheldRate 
+                    ? parseFloat(ethers.utils.formatEther(collateral.rates.withheldRate)) * 100 
+                    : 0;
+                
+                // Sommes globales
+                totalCollateral += total;
+                withheldCollateral += withheld;
+                stakedCollateral += staked;
+                
+                // Collatéral pouvant être libéré
+                if (await window.enterpriseFunctions.canReleaseCollateral(invoice.details.invoiceId)) {
+                    if (collateral.isReleased) {
+                        releasableCollateral += 0; // Déjà libéré
+                    } else {
+                        // On peut libérer le collatéral initial moins ce qui est staké
+                        releasableCollateral += Math.max(0, initialDeposit - staked);
                     }
                 }
                 
+                // Pour le taux moyen, on considère seulement le taux initial
+                if (initialRate > 0) {
+                    collateralRates.push(initialRate);
+                }
+                
+                // Échéances à venir
                 if (!invoice.financials.isPaid && invoice.details.dueDate > now) {
                     upcomingDueDates.push({
                         id: invoice.details.invoiceId,
                         dueDate: new Date(invoice.details.dueDate * 1000),
-                        amount: invoiceAmount
+                        amount: invoiceAmount,
+                        collateralStatus: collateral.isReleased ? 'libéré' : collateral.isStaked ? 'staké' : 'déposé'
                     });
                 }
             }
             
-            // Mettez à jour l'UI
+            // Mise à jour de l'interface utilisateur
             document.getElementById('total-amount').textContent = totalAmount.toFixed(2) + ' USDT';
             document.getElementById('withdrawable-amount').textContent = withdrawableAmount.toFixed(2) + ' USDT';
             document.getElementById('total-interest').textContent = totalInterest.toFixed(2) + ' USDT';
             document.getElementById('total-fees').textContent = totalFees.toFixed(2) + ' USDT';
+            
+            // Affichage des collatéraux
             document.getElementById('total-collateral').textContent = totalCollateral.toFixed(2) + ' USDT';
             document.getElementById('releasable-collateral').textContent = releasableCollateral.toFixed(2) + ' USDT';
             
-            const avgCollateralRate = collateralRates.length > 0 ? 
-                (collateralRates.reduce((a, b) => a + b, 0) / collateralRates.length) : 0;
+            // Calcul du taux moyen
+            const avgCollateralRate = collateralRates.length > 0 
+                ? (collateralRates.reduce((a, b) => a + b, 0) / collateralRates.length)
+                : 0;
             document.getElementById('avg-collateral-rate').textContent = avgCollateralRate.toFixed(2) + '%';
             
-            // Affichez les échéances à venir
+            // Affichage des échéances avec statut de collatéral
             const dueDatesContainer = document.getElementById('upcoming-due-dates');
             if (upcomingDueDates.length > 0) {
                 upcomingDueDates.sort((a, b) => a.dueDate - b.dueDate);
                 
                 let html = '<div class="list-group">';
                 upcomingDueDates.slice(0, 5).forEach(due => {
+                    const statusClass = due.collateralStatus === 'libéré' ? 'bg-success' 
+                                    : due.collateralStatus === 'staké' ? 'bg-info' 
+                                    : 'bg-warning text-dark';
+                    
                     html += `
                         <div class="list-group-item bg-darker text-white mb-2">
-                            <div class="d-flex justify-content-between">
+                            <div class="d-flex justify-content-between align-items-center">
                                 <div>
                                     <h6 class="mb-1">Facture #${due.id}</h6>
                                     <small>${due.dueDate.toLocaleDateString('fr-FR')}</small>
                                 </div>
-                                <div class="text-end">
-                                    <span class="badge bg-orange">${due.amount.toFixed(2)} USDT</span>
+                                <div class="d-flex align-items-center gap-2">
+                                    <span class="badge ${statusClass}">
+                                        ${due.collateralStatus}
+                                    </span>
+                                    <span class="badge bg-orange">
+                                        ${due.amount.toFixed(2)} USDT
+                                    </span>
                                 </div>
                             </div>
                         </div>
@@ -1697,6 +1739,7 @@ function setupEnterpriseForms() {
             
         } catch (error) {
             console.error('Error loading enterprise stats:', error);
+            // Vous pouvez ajouter ici un affichage d'erreur dans l'UI si nécessaire
         }
     }
 
@@ -2548,177 +2591,212 @@ async function loadAvailableInvoices() {
 // Fonction pour charger les pools d'investissement
 async function loadInvestmentPools() {
     try {
+        // Afficher le loader
         $('#investment-pools-list').html(`
-            <p class="text-muted text-center">Chargement des pools disponibles...</p>
-            <div class="d-flex justify-content-center">
-                <div class="spinner-border text-orange" role="status">
-                    <span class="visually-hidden">Loading...</span>
+            <div class="text-center py-5">
+                <div class="spinner-border text-orange" style="width: 3rem; height: 3rem;" role="status">
+                    <span class="visually-hidden">Chargement...</span>
                 </div>
+                <p class="mt-3 text-muted">Chargement des pools d'investissement...</p>
             </div>
         `);
-        
+
+        // Vérifier la connexion du portefeuille
         if (!window.walletUtils.isWalletReady()) {
             $('#investment-pools-list').html(`
-                <div class="alert alert-warning text-center">
-                    Veuillez connecter votre portefeuille pour voir les pools disponibles.
+                <div class="alert alert-warning text-center py-4">
+                    <i class="bi bi-exclamation-triangle-fill me-2"></i>
+                    Veuillez connecter votre portefeuille pour voir les pools disponibles
                 </div>
             `);
             return;
         }
-        
+
+        // Récupérer tous les pools
         const allPools = await window.sharedFunctions.getAllPools();
 
-        // Enrichir chaque pool avec ses données de progression et vérifier s'il est investissable
+        // Enrichir chaque pool avec ses données
         const enrichedPools = await Promise.all(allPools.map(async pool => {
             try {
                 const poolInvoices = await window.sharedFunctions.getPoolInvoices(pool.poolId);
                 
-                // Initialiser avec des valeurs par défaut sécurisées
+                // Calcul des montants
                 let totalAmount = ethers.BigNumber.from(0);
                 let collectedAmount = ethers.BigNumber.from(0);
                 
-                if (poolInvoices && poolInvoices.length > 0) {
+                if (poolInvoices?.length > 0) {
                     poolInvoices.forEach(invoice => {
-                        if (invoice.details?.amount) {
-                            totalAmount = totalAmount.add(ethers.BigNumber.from(invoice.details.amount));
-                        }
-                        if (invoice.financials?.collectedAmount) {
-                            collectedAmount = collectedAmount.add(ethers.BigNumber.from(invoice.financials.collectedAmount));
-                        }
+                        totalAmount = totalAmount.add(invoice.details?.amount || 0);
+                        collectedAmount = collectedAmount.add(invoice.financials?.collectedAmount || 0);
                     });
                 }
                 
                 const progress = totalAmount.gt(0) ? 
                     collectedAmount.mul(100).div(totalAmount).toNumber() : 0;
                 
-                // Vérifier si le pool est investissable
-                const canInvest = await window.sharedFunctions.canInvestInPool({
-                    ...pool,
-                    invoiceIds: poolInvoices.map(i => i.details.invoiceId) // Ajouter les IDs des factures
-                });
+                // Déterminer l'état du pool
+                const hasMaxInvoices = poolInvoices.length >= pool.maxInvoiceCount;
+                const canInvest = hasMaxInvoices && pool.isActive && 
+                    await window.sharedFunctions.canInvestInPool({
+                        ...pool,
+                        invoiceIds: poolInvoices.map(i => i.details.invoiceId)
+                    });
+
+                // Déterminer le type de pool pour le style
+                let poolType = '';
+                if (!pool.isActive) {
+                    poolType = 'inactive';
+                } else if (!hasMaxInvoices) {
+                    poolType = 'waiting';
+                } else if (canInvest) {
+                    poolType = 'ready';
+                } else {
+                    poolType = 'unavailable';
+                }
 
                 return {
                     ...pool,
+                    poolType,
                     totalAmount,
                     collectedAmount,
                     progress,
-                    invoiceCount: poolInvoices?.length || 0,
-                    canInvest // Ajouter cette propriété
+                    invoiceCount: poolInvoices.length,
+                    hasMaxInvoices,
+                    canInvest,
+                    missingInvoices: pool.maxInvoiceCount - poolInvoices.length
                 };
             } catch (error) {
                 console.error(`Error enriching pool ${pool.poolId}:`, error);
                 return {
                     ...pool,
+                    poolType: 'error',
                     totalAmount: ethers.BigNumber.from(0),
                     collectedAmount: ethers.BigNumber.from(0),
                     progress: 0,
                     invoiceCount: 0,
-                    canInvest: false // Par défaut, non investissable en cas d'erreur
+                    hasMaxInvoices: false,
+                    canInvest: false,
+                    missingInvoices: pool.maxInvoiceCount
                 };
             }
         }));
 
-        // Appliquer les filtres et tris sur les pools enrichis
-        const filter = $('#pool-filter').val();
-        const sort = $('#pool-sort').val();
+        // Trier les pools (ready > waiting > inactive)
+        enrichedPools.sort((a, b) => {
+            const typeOrder = { 'ready': 1, 'waiting': 2, 'inactive': 3, 'unavailable': 4, 'error': 5 };
+            return typeOrder[a.poolType] - typeOrder[b.poolType] || a.poolId - b.poolId;
+        });
+
+        // Générer le HTML
+        let html = '<div class="row g-4">';
         
-        let filteredPools = [...enrichedPools];
-        
-        // Filtrage
-        if (filter === 'active') {
-            filteredPools = filteredPools.filter(pool => pool.isActive);
-        } else if (filter === 'low-risk') {
-            filteredPools = filteredPools.filter(pool => 
-                pool.metadata?.riskLevel?.toLowerCase()?.includes('low'));
-        } else if (filter === 'high-return') {
-            filteredPools = filteredPools.filter(pool => 
-                pool.metadata?.theme?.toLowerCase()?.includes('high return'));
-        } else if (filter === 'thematic') {
-            filteredPools = filteredPools.filter(pool => 
-                pool.metadata?.theme && !pool.metadata.theme.toLowerCase().includes('general'));
-        }
-        
-        // Tri
-        if (sort === 'newest') {
-            filteredPools.sort((a, b) => b.poolId - a.poolId);
-        } else if (sort === 'oldest') {
-            filteredPools.sort((a, b) => a.poolId - b.poolId);
-        } else if (sort === 'min-invest-asc') {
-            filteredPools.sort((a, b) => {
-                const aVal = parseFloat(ethers.utils.formatEther(a.minInvestment || 0));
-                const bVal = parseFloat(ethers.utils.formatEther(b.minInvestment || 0));
-                return aVal - bVal;
-            });
-        } else if (sort === 'min-invest-desc') {
-            filteredPools.sort((a, b) => {
-                const aVal = parseFloat(ethers.utils.formatEther(a.minInvestment || 0));
-                const bVal = parseFloat(ethers.utils.formatEther(b.minInvestment || 0));
-                return bVal - aVal;
-            });
-        } else if (sort === 'size-asc') {
-            filteredPools.sort((a, b) => (a.invoiceCount || 0) - (b.invoiceCount || 0));
-        } else if (sort === 'size-desc') {
-            filteredPools.sort((a, b) => (b.invoiceCount || 0) - (a.invoiceCount || 0));
-        } else if (sort === 'progress-asc') {
-            filteredPools.sort((a, b) => (a.progress || 0) - (b.progress || 0));
-        } else if (sort === 'progress-desc') {
-            filteredPools.sort((a, b) => (b.progress || 0) - (a.progress || 0));
-        }
-        
-        let html = '<div class="row">';
-        filteredPools.forEach(pool => {
-            // Valeurs sécurisées avec fallback
-            const minInvestment = pool.minInvestment ? 
-                ethers.utils.formatEther(pool.minInvestment) : '0';
+        enrichedPools.forEach(pool => {
+            const minInvestment = ethers.utils.formatEther(pool.minInvestment || 0);
             const bannerUrl = pool.metadata?.bannerURI ? 
                 window.ipfsUtils.getIPFSGatewayURL(pool.metadata.bannerURI) : 
-                'https://via.placeholder.com/600x200?text=Pool+Banner';
+                'https://via.placeholder.com/600x200?text=' + encodeURIComponent(pool.name);
             
-            const collected = pool.collectedAmount ? 
-                ethers.utils.formatEther(pool.collectedAmount) : '0';
-            const total = pool.totalAmount ? 
-                ethers.utils.formatEther(pool.totalAmount) : '0';
-            const progress = pool.progress || 0;
-            
+            // Styles dynamiques en fonction du type de pool
+            const cardClasses = {
+                'ready': 'border-success pool-card-ready',
+                'waiting': 'border-warning pool-card-waiting',
+                'inactive': 'border-secondary pool-card-inactive',
+                'unavailable': 'border-danger pool-card-unavailable',
+                'error': 'border-dark pool-card-error'
+            }[pool.poolType];
+
+            const headerClasses = {
+                'ready': 'bg-success-dark text-white',
+                'waiting': 'bg-warning-dark text-dark',
+                'inactive': 'bg-secondary-dark text-white',
+                'unavailable': 'bg-danger-dark text-white',
+                'error': 'bg-dark text-white'
+            }[pool.poolType];
+
+            const statusBadge = {
+                'ready': `<span class="badge bg-success"><i class="bi bi-check-circle"></i> Prêt</span>`,
+                'waiting': `<span class="badge bg-warning text-dark"><i class="bi bi-hourglass"></i> En attente (${pool.missingInvoices} facture${pool.missingInvoices > 1 ? 's' : ''})</span>`,
+                'inactive': `<span class="badge bg-secondary"><i class="bi bi-pause-circle"></i> Inactif</span>`,
+                'unavailable': `<span class="badge bg-danger"><i class="bi bi-slash-circle"></i> Indisponible</span>`,
+                'error': `<span class="badge bg-dark"><i class="bi bi-exclamation-triangle"></i> Erreur</span>`
+            }[pool.poolType];
+
             html += `
-                <div class="col-lg-6 mb-4">
-                    <div class="card bg-dark text-white h-100">
-                        <img src="${bannerUrl}" class="card-img-top" style="height: 150px; object-fit: cover;" alt="${pool.name}">
+                <div class="col-12 col-md-6 col-lg-4">
+                    <div class="card h-100 ${cardClasses}">
+                        <div class="card-header d-flex justify-content-between align-items-center ${headerClasses}">
+                            <div>${statusBadge}</div>
+                            <small class="text-muted">#${pool.poolId}</small>
+                        </div>
+                        
+                        <div class="card-img-container position-relative">
+                            <img src="${bannerUrl}" class="card-img-top ${pool.poolType !== 'ready' ? 'img-disabled' : ''}" 
+                                 alt="${pool.name}" style="height: 160px; object-fit: cover;">
+                                 
+                            ${pool.poolType === 'waiting' ? `
+                                <div class="pool-waiting-overlay">
+                                    <span class="badge bg-warning text-dark">
+                                        <i class="bi bi-hourglass"></i> ${pool.missingInvoices} facture${pool.missingInvoices > 1 ? 's' : ''} manquante${pool.missingInvoices > 1 ? 's' : ''}
+                                    </span>
+                                </div>
+                            ` : ''}
+                        </div>
+                        
                         <div class="card-body">
                             <h5 class="card-title text-orange">${pool.name}</h5>
-                            <p class="card-text">${pool.metadata?.description?.substring(0, 100) || 'Aucune description disponible'}...</p>
+                            <p class="card-text text-muted small">${pool.metadata?.description?.substring(0, 120) || 'Aucune description disponible'}...</p>
                             
-                            <div class="row">
-                                <div class="col-6">
-                                    <p class="mb-1"><small><i class="bi bi-coin"></i> Min: ${minInvestment} USDT</small></p>
-                                    <p class="mb-1"><small><i class="bi bi-receipt"></i> ${pool.invoiceCount} factures</small></p>
+                            <div class="pool-stats">
+                                <div class="stat-item">
+                                    <i class="bi bi-coin"></i>
+                                    <span>Min: ${minInvestment} USDT</span>
                                 </div>
-                                <div class="col-6 text-end">
-                                    <p class="mb-1"><small><i class="bi bi-shield"></i> ${pool.metadata?.riskLevel || 'N/A'}</small></p>
-                                    <p class="mb-1"><small><i class="bi bi-geo-alt"></i> ${pool.metadata?.region || 'Global'}</small></p>
+                                <div class="stat-item">
+                                    <i class="bi bi-receipt"></i>
+                                    <span>${pool.invoiceCount}/${pool.maxInvoiceCount} factures</span>
                                 </div>
-                            </div>
-
-                            <div class="progress mt-2" style="height: 5px;">
-                                <div class="progress-bar bg-success" role="progressbar" 
-                                    style="width: ${progress}%" 
-                                    aria-valuenow="${progress}" 
-                                    aria-valuemin="0" 
-                                    aria-valuemax="100">
+                                <div class="stat-item">
+                                    <i class="bi ${pool.metadata?.riskLevel?.toLowerCase().includes('low') ? 'bi-shield-check' : 'bi-shield-exclamation'}"></i>
+                                    <span>${pool.metadata?.riskLevel || 'Risque moyen'}</span>
                                 </div>
                             </div>
-                            <p class="text-end small mt-1">${collected} / ${total} USDT (${progress}%)</p>
+                            
+                            <div class="progress mt-3" style="height: 6px;">
+                                <div class="progress-bar ${pool.progress >= 100 ? 'bg-success' : 'bg-info'}" 
+                                     style="width: ${Math.min(100, pool.progress)}%" 
+                                     role="progressbar" 
+                                     aria-valuenow="${pool.progress}" 
+                                     aria-valuemin="0" 
+                                     aria-valuemax="100">
+                                </div>
+                            </div>
+                            <small class="text-muted d-block text-end mt-1">
+                                ${ethers.utils.formatEther(pool.collectedAmount || 0)} / ${ethers.utils.formatEther(pool.totalAmount || 0)} USDT
+                            </small>
                         </div>
-                        <div class="card-footer bg-darker">
-                            <div class="d-flex justify-content-between">
-                                <button class="btn btn-info btn-sm view-pool-btn" data-pool-id="${pool.poolId}">
-                                    <i class="bi bi-eye"></i> Détails
+                        
+                        <div class="card-footer bg-darker border-0">
+                            <div class="d-grid gap-2">
+                                <button class="btn btn-outline-orange btn-sm view-pool-btn" 
+                                        data-pool-id="${pool.poolId}">
+                                    <i class="bi bi-eye-fill"></i> Voir détails
                                 </button>
-                                <button class="btn btn-orange btn-sm invest-pool-btn" 
+                                
+                                <button class="btn ${pool.canInvest ? 'btn-orange' : 'btn-secondary'} btn-sm invest-pool-btn" 
                                         data-pool-id="${pool.poolId}" 
                                         data-min-investment="${minInvestment}"
-                                        ${pool.canInvest ? '' : 'disabled'}>
-                                    <i class="bi bi-coin"></i> ${pool.canInvest ? 'Investir' : 'Indisponible'}
+                                        ${pool.canInvest ? '' : 'disabled'}
+                                        data-bs-toggle="tooltip" 
+                                        data-bs-html="true"
+                                        title="${pool.canInvest ? 
+                                            '<span>Investir dans ce pool</span>' : 
+                                            !pool.hasMaxInvoices ? 
+                                                `<span>En attente de ${pool.missingInvoices} facture${pool.missingInvoices > 1 ? 's' : ''}<br>Minimum requis: ${pool.maxInvoiceCount}</span>` :
+                                            !pool.isActive ? 
+                                                '<span>Le pool est actuellement inactif</span>' : 
+                                                '<span>Investissement temporairement indisponible</span>'}">
+                                    <i class="bi ${pool.canInvest ? 'bi-coin' : 'bi-lock'}"></i>
+                                    ${pool.canInvest ? 'Investir' : 'Indisponible'}
                                 </button>
                             </div>
                         </div>
@@ -2726,14 +2804,48 @@ async function loadInvestmentPools() {
                 </div>
             `;
         });
-        html += '</div>';
+
+        // Cas où il n'y a aucun pool
+        if (enrichedPools.length === 0) {
+            html = `
+                <div class="col-12">
+                    <div class="text-center py-5">
+                        <i class="bi bi-inbox" style="font-size: 3rem; color: #6c757d;"></i>
+                        <h5 class="mt-3 text-muted">Aucun pool disponible</h5>
+                        <p class="text-muted">Aucun pool d'investissement n'est actuellement disponible.</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        html += '</div>'; // Fermer la row
         
         $('#investment-pools-list').html(html);
         
-        // Ajouter les gestionnaires d'événements
+        // Activer les tooltips
+        $('[data-bs-toggle="tooltip"]').tooltip({
+            trigger: 'hover',
+            placement: 'top'
+        });
+        
+        // Gestionnaires d'événements
         $('.invest-pool-btn').click(async function() {
             const poolId = $(this).data('pool-id');
             const minInvestment = $(this).data('min-investment');
+            
+            // Double vérification avant d'investir
+            const poolDetails = await window.sharedFunctions.getPoolDetails(poolId);
+            const poolInvoices = await window.sharedFunctions.getPoolInvoices(poolId);
+            
+            if (poolInvoices.length < poolDetails.maxInvoiceCount) {
+                window.uiUtils.showErrorAlert(
+                    `Ce pool nécessite encore ${poolDetails.maxInvoiceCount - poolInvoices.length} ` +
+                    `facture${poolDetails.maxInvoiceCount - poolInvoices.length > 1 ? 's' : ''} ` +
+                    `pour être disponible à l'investissement.`
+                );
+                return;
+            }
+            
             await showInvestPoolModal(poolId, minInvestment);
         });
         
@@ -2741,12 +2853,14 @@ async function loadInvestmentPools() {
             const poolId = $(this).data('pool-id');
             await showPoolDetailsModal(poolId);
         });
-        
+
     } catch (error) {
         console.error('Error loading investment pools:', error);
         $('#investment-pools-list').html(`
-            <div class="alert alert-danger text-center">
-                Erreur lors du chargement des pools: ${error.message}
+            <div class="alert alert-danger text-center py-4">
+                <i class="bi bi-exclamation-octagon-fill me-2"></i>
+                Une erreur est survenue lors du chargement des pools.<br>
+                <small class="text-muted">${error.message || 'Erreur inconnue'}</small>
             </div>
         `);
     }
